@@ -111,6 +111,7 @@ namespace SandSystem
             world.MarkFootprint(_tmpFootprint, DesertPlacementWorld.Occupant.Factory);
 
             var prefab = prefabs[Random.Range(0, prefabs.Length)];
+            pos = world.SampleGround(pos.x, pos.z);
             var go = Instantiate(prefab, pos, Quaternion.Euler(0f, Random.Range(0f, 360f), 0f), factoryRoot);
 
             var inst = new FactoryInstance

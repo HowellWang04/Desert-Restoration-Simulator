@@ -21,7 +21,7 @@ MonoBehaviour:
     distortionStrength: 0.015
     noiseScale: 8
     scrollSpeed: 0.15
-    windDirection: {x: 0.9999049, y: -0.013789895}
+    windDirection: {x: 0.9980421, y: 0.06254641}
     verticalBias: 0.65
     noiseTexture: {fileID: 2800000, guid: 72949384575d8734ea953c97aa992fc4, type: 3}
     useDepthMask: 1

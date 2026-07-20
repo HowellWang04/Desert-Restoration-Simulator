@@ -27,10 +27,10 @@ namespace SandSystem
         [SerializeField] private float growDurationMax = 1.4f;
         [SerializeField] private float minScale = 0.2f;
         [SerializeField] private float maxScale = 1f;
-        [SerializeField] private int plantAttemptsPerTree = 40;
 
         private readonly List<TreeInstance> _trees = new List<TreeInstance>(1024);
         private readonly Dictionary<long, int> _cellToIndex = new Dictionary<long, int>(1024);
+        private readonly List<Vector2Int> _freeScratch = new List<Vector2Int>(8192);
 
         public int AliveCount => _trees.Count;
         public IReadOnlyList<TreeInstance> Trees => _trees;
@@ -66,17 +66,21 @@ namespace SandSystem
             var prefabs = world.TreePrefabs;
             if (prefabs == null || prefabs.Length == 0) return 0;
 
-            int planted = 0;
-            for (int n = 0; n < count; n++)
-            {
-                if (!TryFindFreeCell(out var cell))
-                    break;
+            // 先收集空位再洗牌：避免格子变密后「随机试 40 次失败 → 整批中断只剩 1 棵」
+            CollectFreeCellsShuffled(_freeScratch);
+            if (_freeScratch.Count == 0) return 0;
 
+            int planted = 0;
+            int want = Mathf.Min(count, _freeScratch.Count);
+            for (int i = 0; i < want; i++)
+            {
+                Vector2Int cell = _freeScratch[i];
                 if (!world.TryReserveTreeCell(cell))
                     continue;
 
                 var prefab = prefabs[Random.Range(0, prefabs.Length)];
                 Vector3 pos = world.TreeCellToWorldCenter(cell);
+                pos = world.SampleGround(pos.x, pos.z);
                 var go = Instantiate(prefab, pos, Quaternion.Euler(0f, Random.Range(0f, 360f), 0f), treeRoot);
                 float target = Random.Range(minScale, maxScale);
                 go.transform.localScale = Vector3.zero;
@@ -148,24 +152,40 @@ namespace SandSystem
             return _cellToIndex.ContainsKey(DesertPlacementWorld.CellKey(cell));
         }
 
-        private bool TryFindFreeCell(out Vector2Int cell)
+        /// <summary>当前地图还能种多少棵（空格子数）。</summary>
+        public int CountFreeCells()
         {
-            cell = default;
+            CollectFreeCellsShuffled(_freeScratch);
+            return _freeScratch.Count;
+        }
+
+        private void CollectFreeCellsShuffled(List<Vector2Int> into)
+        {
+            into.Clear();
+            if (world == null) return;
+
             var b = world.XzBounds;
             float s = world.TreeCellSize;
             int minX = Mathf.FloorToInt(b.min.x / s);
             int maxX = Mathf.FloorToInt(b.max.x / s);
             int minZ = Mathf.FloorToInt(b.min.z / s);
             int maxZ = Mathf.FloorToInt(b.max.z / s);
-            if (maxX < minX || maxZ < minZ) return false;
+            if (maxX < minX || maxZ < minZ) return;
 
-            for (int a = 0; a < plantAttemptsPerTree; a++)
+            for (int z = minZ; z <= maxZ; z++)
+            for (int x = minX; x <= maxX; x++)
             {
-                cell = new Vector2Int(Random.Range(minX, maxX + 1), Random.Range(minZ, maxZ + 1));
+                var cell = new Vector2Int(x, z);
                 if (world.IsTreeCellFree(cell))
-                    return true;
+                    into.Add(cell);
             }
-            return false;
+
+            // Fisher–Yates 洗牌，保持随机分布
+            for (int i = into.Count - 1; i > 0; i--)
+            {
+                int j = Random.Range(0, i + 1);
+                (into[i], into[j]) = (into[j], into[i]);
+            }
         }
 
         private void DestroyTreeAtIndex(int index)

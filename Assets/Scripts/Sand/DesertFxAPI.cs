@@ -195,6 +195,8 @@ namespace SandSystem
             public float sandMidSpeed;
             public float sandFarSpeed;
             public float heatDistortionStrength;
+            public float skyClearness;
+            public float skyCloudCoverage;
         }
 
         public static FxSnapshot CaptureSnapshot()
@@ -210,7 +212,9 @@ namespace SandSystem
                 sandNearSpeed = GetSandLayerSpeed(0),
                 sandMidSpeed = GetSandLayerSpeed(1),
                 sandFarSpeed = GetSandLayerSpeed(2),
-                heatDistortionStrength = GetHeatDistortionStrength()
+                heatDistortionStrength = GetHeatDistortionStrength(),
+                skyClearness = GetSkyClearness(),
+                skyCloudCoverage = GetSkyCloudCoverage()
             };
         }
 
@@ -221,6 +225,49 @@ namespace SandSystem
             SetSandAllLayerDensities(s.sandNearDensity, s.sandMidDensity, s.sandFarDensity);
             SetSandAllLayerSpeeds(s.sandNearSpeed, s.sandMidSpeed, s.sandFarSpeed);
             SetHeatDistortionStrength(s.heatDistortionStrength);
+            SetSky(s.skyClearness, s.skyCloudCoverage);
+        }
+
+        // -------- Sky --------
+
+        public static float GetSkyClearness()
+        {
+            return SkyboxController.Instance != null ? SkyboxController.Instance.Clearness : 0f;
+        }
+
+        public static float GetSkyCloudCoverage()
+        {
+            return SkyboxController.Instance != null ? SkyboxController.Instance.CloudCoverage : 0f;
+        }
+
+        public static void SetSkyClearness(float clearness)
+        {
+            if (SkyboxController.Instance == null)
+            {
+                Debug.LogWarning("[DesertFxAPI] SkyboxController missing.");
+                return;
+            }
+            SkyboxController.Instance.SetClearness(clearness);
+        }
+
+        public static void SetSkyCloudCoverage(float coverage)
+        {
+            if (SkyboxController.Instance == null)
+            {
+                Debug.LogWarning("[DesertFxAPI] SkyboxController missing.");
+                return;
+            }
+            SkyboxController.Instance.SetCloudCoverage(coverage);
+        }
+
+        public static void SetSky(float clearness, float cloudCoverage)
+        {
+            if (SkyboxController.Instance == null)
+            {
+                Debug.LogWarning("[DesertFxAPI] SkyboxController missing.");
+                return;
+            }
+            SkyboxController.Instance.SetSky(clearness, cloudCoverage);
         }
     }
 }

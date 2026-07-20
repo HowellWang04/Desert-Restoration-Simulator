@@ -14,6 +14,7 @@ namespace SandSystem.Editor
         {
             var env = EnsureEnvironmentSystem();
             var world = EnsureWorldPlacement();
+            SkyboxSetup.SetupQuiet();
             EnsureEventSystem();
             var canvasGo = EnsureDecisionCanvas(env, world);
 
@@ -23,11 +24,9 @@ namespace SandSystem.Editor
             EditorUtility.DisplayDialog(
                 "Environment Decision UI",
                 "已创建 / 更新：\n" +
-                "• EnvironmentSystem（决策 → E → 风/沙/热浪）\n" +
-                "• WorldPlacement（种树 / 建厂 / 采矿）\n" +
-                "• DecisionUI\n\n" +
-                "Prefab：Resources/_Prefab/tree 与 factory\n" +
-                "请确认场景里已有 WindSystem / AirborneSand / HeatSystem。",
+                "• EnvironmentSystem / EconomySystem / WorldPlacement / SkySystem / DecisionUI\n\n" +
+                "金钱系统可在 EconomySystem 或 UI 开关关闭。\n" +
+                "建议删掉旧 DecisionUI 再跑本菜单，以刷新面板。",
                 "OK");
         }
 
@@ -70,15 +69,27 @@ namespace SandSystem.Editor
                 env = go.AddComponent<DesertEnvironmentSystem>();
             }
 
-            // 应用当前默认：树上限 50000、最糟热浪 0.02
+            // 应用当前默认：树不设上限、最糟热浪 0.02、晴空关键帧
             var so = new SerializedObject(env);
             var config = so.FindProperty("config");
             if (config != null)
             {
-                config.FindPropertyRelative("treeMax").intValue = 50000;
+                config.FindPropertyRelative("treeMax").intValue = 0;
                 config.FindPropertyRelative("badHeatStrength").floatValue = 0.02f;
+                config.FindPropertyRelative("clearSkyTreeThreshold").intValue = 15000;
+                config.FindPropertyRelative("clearSkySkyStartTrees").intValue = 10000;
+                config.FindPropertyRelative("clearSkyStartClearness").floatValue = 0.3f;
+                config.FindPropertyRelative("clearSkyEndClearness").floatValue = 1f;
+                config.FindPropertyRelative("clearSkyStartCloudCoverage").floatValue = 0.35f;
+                config.FindPropertyRelative("clearSkyEndCloudCoverage").floatValue = 0.65f;
+                config.FindPropertyRelative("clearSkyHeatStartTrees").intValue = 13500;
+                config.FindPropertyRelative("clearSkySandStartTrees").intValue = 12800;
+                config.FindPropertyRelative("blendSeconds").floatValue = 1.8f;
                 so.ApplyModifiedPropertiesWithoutUndo();
             }
+
+            if (env.GetComponent<DesertEconomySystem>() == null)
+                env.gameObject.AddComponent<DesertEconomySystem>();
 
             return env;
         }
@@ -104,7 +115,11 @@ namespace SandSystem.Editor
             if (go.GetComponent<MiningSystem>() == null)
                 go.AddComponent<MiningSystem>();
 
-            return go.GetComponent<DesertPlacementWorld>();
+            var world = go.GetComponent<DesertPlacementWorld>();
+            var so = new SerializedObject(world);
+            so.FindProperty("treeCellSize").floatValue = 1.2f;
+            so.ApplyModifiedPropertiesWithoutUndo();
+            return world;
         }
 
         static void EnsureEventSystem()
@@ -121,10 +136,13 @@ namespace SandSystem.Editor
 
         static GameObject EnsureDecisionCanvas(DesertEnvironmentSystem env, DesertPlacementWorld world)
         {
+            var economy = env != null ? env.GetComponent<DesertEconomySystem>() : null;
             var existingUi = Object.FindFirstObjectByType<DesertEnvironmentUI>();
             if (existingUi != null)
             {
-                WireUiReferences(existingUi, env, world);
+                RemoveClearSkyUiObjects(existingUi);
+                WireUiReferences(existingUi, env, world, economy);
+                EnsureMoneyUi(existingUi, economy);
                 return existingUi.gameObject;
             }
 
@@ -139,7 +157,7 @@ namespace SandSystem.Editor
             scaler.matchWidthOrHeight = 0.5f;
             canvasGo.AddComponent<GraphicRaycaster>();
 
-            var panel = CreatePanel(canvasGo.transform, "Panel", new Vector2(420, 520), new Vector2(16, -16));
+            var panel = CreatePanel(canvasGo.transform, "Panel", new Vector2(460, 580), new Vector2(16, -16));
             var anchor = panel.GetComponent<RectTransform>();
             anchor.anchorMin = new Vector2(0f, 1f);
             anchor.anchorMax = new Vector2(0f, 1f);
@@ -147,43 +165,50 @@ namespace SandSystem.Editor
             anchor.anchoredPosition = new Vector2(24, -24);
 
             float y = -24f;
-            var title = CreateText(panel.transform, "Title", "环境决策", 28, TextAnchor.MiddleLeft, y, 36);
-            y -= 48f;
+            CreateText(panel.transform, "Title", "环境决策", 28, TextAnchor.MiddleLeft, y, 36);
+            y -= 44f;
 
-            var envLabel = CreateText(panel.transform, "EnvironmentLabel", "环境指数 E  0.50", 22, TextAnchor.MiddleLeft, y, 30);
-            y -= 36f;
+            var moneyLabel = CreateText(panel.transform, "MoneyLabel", "金钱  8000", 22, TextAnchor.MiddleLeft, y, 30);
+            y -= 34f;
+            var envLabel = CreateText(panel.transform, "EnvironmentLabel", "环境指数 E  0.50", 20, TextAnchor.MiddleLeft, y, 28);
+            y -= 32f;
             var windHint = CreateText(panel.transform, "WindDirHint", "自动风向：开", 16, TextAnchor.MiddleLeft, y, 24);
-            y -= 40f;
+            y -= 36f;
 
-            var treeLabel = CreateText(panel.transform, "TreeLabel", "树木  0 / 50000", 20, TextAnchor.MiddleLeft, y, 28);
-            y -= 34f;
+            var treeLabel = CreateText(panel.transform, "TreeLabel", "树木  0", 18, TextAnchor.MiddleLeft, y, 26);
+            y -= 30f;
             var (plantTree, removeTree) = CreatePlusMinusRow(panel.transform, "TreeRow", y, "种树 +", "移除 -");
-            y -= 56f;
+            y -= 52f;
 
-            var factoryLabel = CreateText(panel.transform, "FactoryLabel", "工厂  0 / 20", 20, TextAnchor.MiddleLeft, y, 28);
-            y -= 34f;
+            var factoryLabel = CreateText(panel.transform, "FactoryLabel", "工厂  0 / 20", 18, TextAnchor.MiddleLeft, y, 26);
+            y -= 30f;
             var (buildFactory, removeFactory) = CreatePlusMinusRow(panel.transform, "FactoryRow", y, "建厂 +", "拆除 -");
-            y -= 56f;
+            y -= 52f;
 
-            var miningLabel = CreateText(panel.transform, "MiningLabel", "开采  0 / 100", 20, TextAnchor.MiddleLeft, y, 28);
-            y -= 34f;
-            var (startMining, reduceMining) = CreatePlusMinusRow(panel.transform, "MiningRow", y, "开采 +", "减少 -");
-            y -= 60f;
+            var miningLabel = CreateText(panel.transform, "MiningLabel", "开采  0 / 100", 18, TextAnchor.MiddleLeft, y, 26);
+            y -= 30f;
+            var startMining = CreateSingleButton(panel.transform, "MiningRow", y, "开采");
+            y -= 56f;
 
             var toggleGo = CreateToggle(panel.transform, "AutoWindToggle", "自动改变风向", y);
             var toggle = toggleGo.GetComponent<Toggle>();
             toggle.isOn = true;
+            y -= 40f;
+
+            var ecoToggleGo = CreateToggle(panel.transform, "EconomyToggle", "启用金钱系统", y);
+            var ecoToggle = ecoToggleGo.GetComponent<Toggle>();
+            ecoToggle.isOn = true;
 
             var ui = canvasGo.AddComponent<DesertEnvironmentUI>();
-            WireUiReferences(ui, env, world);
-            // labels / buttons already assigned below via SerializedObject after create —
-            // WireUiReferences only sets systems; continue assigning UI widgets:
+            WireUiReferences(ui, env, world, economy);
 
             var so = new SerializedObject(ui);
             so.FindProperty("environment").objectReferenceValue = env;
+            so.FindProperty("economy").objectReferenceValue = economy;
             so.FindProperty("treePlacement").objectReferenceValue = world != null ? world.GetComponent<TreePlacementSystem>() : null;
             so.FindProperty("factoryPlacement").objectReferenceValue = world != null ? world.GetComponent<FactoryPlacementSystem>() : null;
             so.FindProperty("miningSystem").objectReferenceValue = world != null ? world.GetComponent<MiningSystem>() : null;
+            so.FindProperty("moneyLabel").objectReferenceValue = moneyLabel;
             so.FindProperty("treeLabel").objectReferenceValue = treeLabel;
             so.FindProperty("factoryLabel").objectReferenceValue = factoryLabel;
             so.FindProperty("miningLabel").objectReferenceValue = miningLabel;
@@ -194,25 +219,95 @@ namespace SandSystem.Editor
             so.FindProperty("buildFactoryButton").objectReferenceValue = buildFactory;
             so.FindProperty("removeFactoryButton").objectReferenceValue = removeFactory;
             so.FindProperty("startMiningButton").objectReferenceValue = startMining;
-            so.FindProperty("reduceMiningButton").objectReferenceValue = reduceMining;
             so.FindProperty("autoWindDirectionToggle").objectReferenceValue = toggle;
-            so.FindProperty("treeStep").intValue = 10;
+            so.FindProperty("enableEconomyToggle").objectReferenceValue = ecoToggle;
+            so.FindProperty("treeStep").intValue = 100;
             so.ApplyModifiedPropertiesWithoutUndo();
 
             return canvasGo;
         }
 
-        static void WireUiReferences(DesertEnvironmentUI ui, DesertEnvironmentSystem env, DesertPlacementWorld world)
+        static void RemoveClearSkyUiObjects(DesertEnvironmentUI ui)
+        {
+            if (ui == null) return;
+            var panel = ui.transform.Find("Panel");
+            if (panel == null) return;
+            DestroyNamed(panel, "ClearSkyLabel");
+            DestroyNamed(panel, "ClearSkyInput");
+            DestroyNamed(panel, "ClearSkyRow");
+        }
+
+        static void DestroyNamed(Transform parent, string name)
+        {
+            var t = parent.Find(name);
+            if (t != null) Object.DestroyImmediate(t.gameObject);
+        }
+
+        static void EnsureMoneyUi(DesertEnvironmentUI ui, DesertEconomySystem economy)
+        {
+            if (ui == null) return;
+            var so = new SerializedObject(ui);
+            so.FindProperty("economy").objectReferenceValue = economy;
+
+            var panel = ui.transform.Find("Panel");
+            if (panel == null)
+            {
+                so.ApplyModifiedPropertiesWithoutUndo();
+                return;
+            }
+
+            if (so.FindProperty("moneyLabel").objectReferenceValue == null)
+            {
+                var moneyLabel = CreateText(panel, "MoneyLabel", "金钱  8000", 22, TextAnchor.MiddleLeft, -70f, 30);
+                so.FindProperty("moneyLabel").objectReferenceValue = moneyLabel;
+            }
+
+            if (so.FindProperty("enableEconomyToggle").objectReferenceValue == null)
+            {
+                var ecoToggleGo = CreateToggle(panel, "EconomyToggle", "启用金钱系统", -540f);
+                var ecoToggle = ecoToggleGo.GetComponent<Toggle>();
+                ecoToggle.isOn = true;
+                so.FindProperty("enableEconomyToggle").objectReferenceValue = ecoToggle;
+            }
+
+            // 采矿不可撤销：去掉「减少」按钮
+            var miningRow = panel.Find("MiningRow");
+            if (miningRow != null)
+            {
+                var minus = miningRow.Find("Minus");
+                if (minus != null) Object.DestroyImmediate(minus.gameObject);
+                var plus = miningRow.Find("Plus");
+                if (plus != null)
+                {
+                    var label = plus.GetComponentInChildren<Text>();
+                    if (label != null) label.text = "开采";
+                    var rt = plus.GetComponent<RectTransform>();
+                    if (rt != null)
+                    {
+                        rt.anchorMin = new Vector2(0f, 0f);
+                        rt.anchorMax = new Vector2(1f, 1f);
+                        rt.offsetMin = Vector2.zero;
+                        rt.offsetMax = Vector2.zero;
+                    }
+                    so.FindProperty("startMiningButton").objectReferenceValue = plus.GetComponent<Button>();
+                }
+            }
+
+            so.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        static void WireUiReferences(DesertEnvironmentUI ui, DesertEnvironmentSystem env, DesertPlacementWorld world, DesertEconomySystem economy)
         {
             var so = new SerializedObject(ui);
             so.FindProperty("environment").objectReferenceValue = env;
+            so.FindProperty("economy").objectReferenceValue = economy;
             if (world != null)
             {
                 so.FindProperty("treePlacement").objectReferenceValue = world.GetComponent<TreePlacementSystem>();
                 so.FindProperty("factoryPlacement").objectReferenceValue = world.GetComponent<FactoryPlacementSystem>();
                 so.FindProperty("miningSystem").objectReferenceValue = world.GetComponent<MiningSystem>();
             }
-            so.FindProperty("treeStep").intValue = 10;
+            so.FindProperty("treeStep").intValue = 100;
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 
@@ -270,6 +365,22 @@ namespace SandSystem.Editor
             var plus = CreateButton(row.transform, "Plus", plusLabel, new Vector2(0f, 0.5f), new Vector2(0.48f, 0.5f), new Vector2(0f, 0.5f));
             var minus = CreateButton(row.transform, "Minus", minusLabel, new Vector2(0.52f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f));
             return (plus, minus);
+        }
+
+        static Button CreateSingleButton(Transform parent, string rowName, float y, string label)
+        {
+            var row = new GameObject(rowName, typeof(RectTransform));
+            row.transform.SetParent(parent, false);
+            var rt = row.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.anchoredPosition = new Vector2(0f, y);
+            rt.sizeDelta = new Vector2(-32f, 44f);
+            rt.offsetMin = new Vector2(16f, rt.offsetMin.y);
+            rt.offsetMax = new Vector2(-16f, rt.offsetMax.y);
+
+            return CreateButton(row.transform, "Action", label, new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0.5f, 0.5f));
         }
 
         static Button CreateButton(Transform parent, string name, string label, Vector2 anchorMin, Vector2 anchorMax, Vector2 pivot)

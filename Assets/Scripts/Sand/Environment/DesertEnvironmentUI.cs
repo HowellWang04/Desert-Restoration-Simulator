@@ -4,7 +4,7 @@ using UnityEngine.UI;
 namespace SandSystem
 {
     /// <summary>
-    /// 三项决策 UI：种树 / 建厂 / 开采。点击后调用真实放置系统。
+    /// 三项决策 UI：种树 / 建厂 / 开采 + 金钱显示。
     /// </summary>
     [DisallowMultipleComponent]
     [AddComponentMenu("Sand/Desert Environment UI")]
@@ -12,11 +12,13 @@ namespace SandSystem
     {
         [Header("System")]
         [SerializeField] private DesertEnvironmentSystem environment;
+        [SerializeField] private DesertEconomySystem economy;
         [SerializeField] private TreePlacementSystem treePlacement;
         [SerializeField] private FactoryPlacementSystem factoryPlacement;
         [SerializeField] private MiningSystem miningSystem;
 
         [Header("Labels")]
+        [SerializeField] private Text moneyLabel;
         [SerializeField] private Text treeLabel;
         [SerializeField] private Text factoryLabel;
         [SerializeField] private Text miningLabel;
@@ -33,13 +35,13 @@ namespace SandSystem
 
         [Header("Buttons — Mining")]
         [SerializeField] private Button startMiningButton;
-        [SerializeField] private Button reduceMiningButton;
 
         [Header("Options")]
         [SerializeField] private Toggle autoWindDirectionToggle;
+        [SerializeField] private Toggle enableEconomyToggle;
 
         [Header("Step")]
-        [SerializeField] private int treeStep = 10;
+        [SerializeField] private int treeStep = 100;
         [SerializeField] private int factoryStep = 1;
         [SerializeField] private int miningStep = 1;
 
@@ -53,14 +55,18 @@ namespace SandSystem
         {
             if (environment != null)
                 environment.OnEnvironmentChanged += RefreshLabels;
+            if (economy != null)
+                economy.OnMoneyChanged += RefreshLabels;
             RefreshLabels();
-            SyncToggleFromSystem();
+            SyncTogglesFromSystem();
         }
 
         private void OnDisable()
         {
             if (environment != null)
                 environment.OnEnvironmentChanged -= RefreshLabels;
+            if (economy != null)
+                economy.OnMoneyChanged -= RefreshLabels;
         }
 
         private void ResolveRefs()
@@ -69,6 +75,11 @@ namespace SandSystem
                 environment = DesertEnvironmentSystem.Instance != null
                     ? DesertEnvironmentSystem.Instance
                     : FindFirstObjectByType<DesertEnvironmentSystem>();
+
+            if (economy == null)
+                economy = DesertEconomySystem.Instance != null
+                    ? DesertEconomySystem.Instance
+                    : FindFirstObjectByType<DesertEconomySystem>();
 
             if (treePlacement == null)
                 treePlacement = TreePlacementSystem.Instance != null
@@ -118,85 +129,73 @@ namespace SandSystem
                 startMiningButton.onClick.AddListener(OnStartMiningClicked);
             }
 
-            if (reduceMiningButton != null)
-            {
-                reduceMiningButton.onClick.RemoveAllListeners();
-                reduceMiningButton.onClick.AddListener(OnReduceMiningClicked);
-            }
-
             if (autoWindDirectionToggle != null)
             {
                 autoWindDirectionToggle.onValueChanged.RemoveAllListeners();
                 autoWindDirectionToggle.onValueChanged.AddListener(OnAutoWindDirectionChanged);
             }
+
+            if (enableEconomyToggle != null)
+            {
+                enableEconomyToggle.onValueChanged.RemoveAllListeners();
+                enableEconomyToggle.onValueChanged.AddListener(OnEnableEconomyChanged);
+            }
         }
 
-        private void SyncToggleFromSystem()
+        private void SyncTogglesFromSystem()
         {
-            if (environment == null || autoWindDirectionToggle == null) return;
-            autoWindDirectionToggle.SetIsOnWithoutNotify(environment.EnableAutoWindDirection);
+            if (environment != null && autoWindDirectionToggle != null)
+                autoWindDirectionToggle.SetIsOnWithoutNotify(environment.EnableAutoWindDirection);
+            if (economy != null && enableEconomyToggle != null)
+                enableEconomyToggle.SetIsOnWithoutNotify(economy.EnableEconomy);
         }
 
         // =====================================================================
-        // 决策按钮 → 真实放置
-        // =====================================================================
 
-        /// <summary>UI：种树 (+) — 每次长出 treeStep 棵（默认 10）</summary>
         public void OnPlantTreeClicked()
         {
             if (!EnsureSystem()) return;
             ResolveRefs();
+            if (treePlacement == null) return;
 
-            if (treePlacement == null)
+            int want = treeStep;
+            if (economy != null && economy.EnableEconomy)
             {
-                Debug.LogWarning("[DesertEnvironmentUI] TreePlacementSystem missing. Run Sand / Setup World Placement.");
-                return;
-            }
-
-            // 真实种树：随机位置 / 随机 prefab / 生长缩放
-            int room = Mathf.Max(0, environment.Config.treeMax - environment.TreeCount);
-            int want = Mathf.Min(treeStep, room);
-            if (want <= 0)
-            {
-                Debug.Log("[DesertEnvironmentUI] Tree count already at max.");
-                return;
+                want = economy.MaxAffordableTrees(treeStep);
+                if (want <= 0)
+                {
+                    Debug.Log("[DesertEnvironmentUI] 金钱不足，无法种树。");
+                    RefreshLabels();
+                    return;
+                }
             }
 
             int planted = treePlacement.PlantTrees(want);
+            if (planted > 0 && economy != null)
+                economy.TryPayForTrees(planted);
+
             SyncTreeCountFromWorld();
-            if (planted < want)
-                Debug.Log($"[DesertEnvironmentUI] Planted {planted}/{want} (no free cells or prefab missing).");
+            if (planted < treeStep)
+                Debug.Log($"[DesertEnvironmentUI] Planted {planted}/{treeStep} (资金或空位不足).");
             RefreshLabels();
         }
 
-        /// <summary>UI：减少树木 (-) — 直接删除最近的树</summary>
         public void OnRemoveTreeClicked()
         {
             if (!EnsureSystem()) return;
             ResolveRefs();
-
-            if (treePlacement == null)
-            {
-                Debug.LogWarning("[DesertEnvironmentUI] TreePlacementSystem missing.");
-                return;
-            }
+            if (treePlacement == null) return;
 
             treePlacement.RemoveTrees(treeStep);
             SyncTreeCountFromWorld();
             RefreshLabels();
         }
 
-        /// <summary>UI：新建厂房 (+)</summary>
         public void OnBuildFactoryClicked()
         {
             if (!EnsureSystem()) return;
             ResolveRefs();
-
-            if (factoryPlacement == null)
-            {
-                Debug.LogWarning("[DesertEnvironmentUI] FactoryPlacementSystem missing. Run Sand / Setup World Placement.");
-                return;
-            }
+            if (factoryPlacement == null) return;
 
             int room = Mathf.Max(0, environment.Config.factoryMax - environment.FactoryCount);
             int want = Mathf.Min(factoryStep, room);
@@ -210,8 +209,23 @@ namespace SandSystem
             int clearedTreesTotal = 0;
             for (int i = 0; i < want; i++)
             {
+                if (economy != null && economy.EnableEconomy && !economy.CanAffordFactory())
+                {
+                    if (built == 0)
+                        Debug.Log("[DesertEnvironmentUI] 金钱不足，无法建厂。");
+                    break;
+                }
+
                 if (!factoryPlacement.BuildFactory(out int cleared))
                     break;
+
+                if (economy != null && !economy.TryPayForFactory())
+                {
+                    // 理论上 CanAfford 已过；若失败则拆除刚建的（极少见）
+                    factoryPlacement.RemoveLastFactory();
+                    break;
+                }
+
                 built++;
                 clearedTreesTotal += cleared;
             }
@@ -219,12 +233,7 @@ namespace SandSystem
             if (built > 0)
             {
                 environment.AddFactories(built);
-                // 覆盖树木时：世界树已删，同步 UI 树数量
                 SyncTreeCountFromWorld();
-            }
-            else
-            {
-                Debug.LogWarning("[DesertEnvironmentUI] No space to build factory.");
             }
 
             if (clearedTreesTotal > 0)
@@ -233,12 +242,10 @@ namespace SandSystem
             RefreshLabels();
         }
 
-        /// <summary>UI：拆除厂房 (-)</summary>
         public void OnRemoveFactoryClicked()
         {
             if (!EnsureSystem()) return;
             ResolveRefs();
-
             if (factoryPlacement == null) return;
 
             int removed = 0;
@@ -253,20 +260,24 @@ namespace SandSystem
             RefreshLabels();
         }
 
-        /// <summary>UI：开采 (+) — 圈定范围删树，并增加开采计数</summary>
         public void OnStartMiningClicked()
         {
             if (!EnsureSystem()) return;
             ResolveRefs();
-
-            if (miningSystem == null)
-            {
-                Debug.LogWarning("[DesertEnvironmentUI] MiningSystem missing. Run Sand / Setup World Placement.");
-                return;
-            }
+            if (miningSystem == null) return;
 
             for (int i = 0; i < miningStep; i++)
             {
+                if (economy != null && economy.EnableEconomy && !economy.CanAffordMining())
+                {
+                    if (i == 0)
+                        Debug.Log("[DesertEnvironmentUI] 金钱不足，无法采矿。");
+                    break;
+                }
+
+                if (economy != null && !economy.TryPayForMiningAndSchedulePayout())
+                    break;
+
                 int cleared = miningSystem.MineOnce(out _, out _);
                 environment.AddMining(1);
                 SyncTreeCountFromWorld();
@@ -277,15 +288,6 @@ namespace SandSystem
             RefreshLabels();
         }
 
-        /// <summary>UI：减少开采计数（不恢复树木）</summary>
-        public void OnReduceMiningClicked()
-        {
-            if (!EnsureSystem()) return;
-            environment.AddMining(-miningStep);
-            RefreshLabels();
-        }
-
-        /// <summary>UI：是否自动根据环境改风向</summary>
         public void OnAutoWindDirectionChanged(bool enabled)
         {
             if (!EnsureSystem()) return;
@@ -293,7 +295,14 @@ namespace SandSystem
             RefreshLabels();
         }
 
-        /// <summary>以场景里真实存活树数量为准，同步环境指数用的树计数。</summary>
+        public void OnEnableEconomyChanged(bool enabled)
+        {
+            ResolveRefs();
+            if (economy == null) return;
+            economy.EnableEconomy = enabled;
+            RefreshLabels();
+        }
+
         private void SyncTreeCountFromWorld()
         {
             if (environment == null) return;
@@ -305,24 +314,63 @@ namespace SandSystem
             environment.SetTreeCount(treePlacement.AliveCount);
         }
 
-        // =====================================================================
-
         public void RefreshLabels()
         {
             if (environment == null) return;
 
-            int tMax = Mathf.Max(1, environment.Config.treeMax);
             int fMax = Mathf.Max(1, environment.Config.factoryMax);
             int mMax = Mathf.Max(1, environment.Config.miningMax);
 
+            if (moneyLabel != null)
+            {
+                if (economy == null || !economy.EnableEconomy)
+                    moneyLabel.text = "金钱  （系统关闭）";
+                else
+                    moneyLabel.text = $"金钱  {economy.Money}";
+            }
+
             if (treeLabel != null)
-                treeLabel.text = $"树木  {environment.TreeCount} / {tMax}";
+            {
+                string costHint = "";
+                if (economy != null && economy.EnableEconomy)
+                    costHint = $"  ·种{treeStep}棵需{economy.TreeBatchCost(treeStep)}";
+                treeLabel.text = $"树木  {environment.TreeCount}{costHint}";
+            }
+
             if (factoryLabel != null)
-                factoryLabel.text = $"工厂  {environment.FactoryCount} / {fMax}";
+            {
+                string costHint = "";
+                if (economy != null)
+                {
+                    float income = economy.CurrentFactoryIncomePerSecond;
+                    float kill = economy.CurrentPollutionKillPerSecond;
+                    if (economy.EnableEconomy)
+                        costHint = $"  ·建{economy.FactoryCost} / +{income:0.#}/秒 / 污染-{kill:0.#}树/秒";
+                    else if (kill > 0.01f)
+                        costHint = $"  ·污染-{kill:0.#}树/秒";
+                }
+                factoryLabel.text = $"工厂  {environment.FactoryCount} / {fMax}{costHint}";
+            }
+
             if (miningLabel != null)
-                miningLabel.text = $"开采  {environment.MiningCount} / {mMax}";
+            {
+                string costHint = "";
+                if (economy != null && economy.EnableEconomy)
+                    costHint = $"  ·费{economy.MiningCost}→收{economy.Config.miningStageTotalPayout}";
+                miningLabel.text = $"开采  {environment.MiningCount} / {mMax}{costHint}";
+            }
+
             if (environmentLabel != null)
-                environmentLabel.text = $"环境指数 E  {environment.EnvironmentIndex:0.00}";
+            {
+                float clear = environment.EvaluateClearSkyBlend();
+                string skyHint = clear >= 0.999f
+                    ? "  · 晴空"
+                    : clear > 0.01f
+                        ? $"  · 晴空过渡 {clear:0%}"
+                        : "";
+                environmentLabel.text = $"环境指数 E  {environment.EnvironmentIndex:0.00}{skyHint}";
+            }
+
             if (windDirHintLabel != null)
             {
                 windDirHintLabel.text = environment.EnableAutoWindDirection
@@ -339,7 +387,7 @@ namespace SandSystem
                 : FindFirstObjectByType<DesertEnvironmentSystem>();
             if (environment == null)
             {
-                Debug.LogWarning("[DesertEnvironmentUI] DesertEnvironmentSystem missing. Run Sand / Setup Environment Decision UI.");
+                Debug.LogWarning("[DesertEnvironmentUI] DesertEnvironmentSystem missing.");
                 return false;
             }
             return true;

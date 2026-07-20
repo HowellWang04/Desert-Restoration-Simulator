@@ -24,12 +24,12 @@ namespace SandSystem
         [Tooltip("为空则自动用 Terrain 范围；无 Terrain 则用下方手动范围")]
         [SerializeField] private Terrain terrain;
         [SerializeField] private Vector3 manualCenter = Vector3.zero;
-        [SerializeField] private Vector2 manualSize = new Vector2(200f, 200f);
-        [SerializeField] private float yOffset = 0.02f;
+        [SerializeField] private Vector2 manualSize = new Vector2(180f, 180f);
+        [SerializeField] private float yOffset = 0.08f;
 
         [Header("Grid")]
-        [Tooltip("树木占用格子边长（米）")]
-        [SerializeField] private float treeCellSize = 2f;
+        [Tooltip("树木占用格子边长（米）。180×180 地图约可种 (180/size)^2 棵；1.2m ≈ 2.2 万格，可支撑 15000 晴空目标")]
+        [SerializeField] private float treeCellSize = 1.2f;
         [Tooltip("工厂占用半径（米），互相不重叠）")]
         [SerializeField] private float factoryRadius = 8f;
         [Tooltip("工厂尽量避开树木时的检测半径")]
@@ -95,10 +95,41 @@ namespace SandSystem
 
         public void EnsureBounds()
         {
-            if (_boundsReady && terrain == null) return;
-
             if (terrain == null)
                 terrain = Terrain.activeTerrain;
+
+            var terrains = Terrain.activeTerrains;
+            if (terrains != null && terrains.Length > 0)
+            {
+                bool has = false;
+                Bounds union = default;
+                for (int i = 0; i < terrains.Length; i++)
+                {
+                    var t = terrains[i];
+                    if (t == null || t.terrainData == null) continue;
+                    var td = t.terrainData;
+                    var pos = t.transform.position;
+                    var b = new Bounds(
+                        new Vector3(pos.x + td.size.x * 0.5f, pos.y + td.size.y * 0.5f, pos.z + td.size.z * 0.5f),
+                        td.size);
+                    if (!has)
+                    {
+                        union = b;
+                        has = true;
+                    }
+                    else
+                    {
+                        union.Encapsulate(b);
+                    }
+                }
+
+                if (has)
+                {
+                    _xzBounds = union;
+                    _boundsReady = true;
+                    return;
+                }
+            }
 
             if (terrain != null)
             {
@@ -133,12 +164,49 @@ namespace SandSystem
 
         public Vector3 SampleGround(float x, float z)
         {
-            float y = 0f;
-            if (terrain != null)
-                y = terrain.SampleHeight(new Vector3(x, 0f, z)) + terrain.transform.position.y;
-            else if (Physics.Raycast(new Vector3(x, 5000f, z), Vector3.down, out var hit, 10000f))
-                y = hit.point.y;
-            return new Vector3(x, y + yOffset, z);
+            if (TrySampleTerrainHeight(x, z, out float y))
+                return new Vector3(x, y + yOffset, z);
+
+            // 多地形时：射线打到 TerrainCollider / 地面
+            if (Physics.Raycast(new Vector3(x, 8000f, z), Vector3.down, out var hit, 20000f,
+                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                return new Vector3(x, hit.point.y + yOffset, z);
+
+            return new Vector3(x, yOffset, z);
+        }
+
+        /// <summary>在全部激活 Terrain 中按 XZ 找正确地块采样高度（修复种在土层下）。</summary>
+        public bool TrySampleTerrainHeight(float x, float z, out float worldY)
+        {
+            var terrains = Terrain.activeTerrains;
+            if (terrains != null)
+            {
+                for (int i = 0; i < terrains.Length; i++)
+                {
+                    var t = terrains[i];
+                    if (t == null || t.terrainData == null) continue;
+                    if (!IsPointOnTerrainXZ(t, x, z)) continue;
+                    worldY = t.SampleHeight(new Vector3(x, 0f, z)) + t.transform.position.y;
+                    return true;
+                }
+            }
+
+            if (terrain != null && terrain.terrainData != null && IsPointOnTerrainXZ(terrain, x, z))
+            {
+                worldY = terrain.SampleHeight(new Vector3(x, 0f, z)) + terrain.transform.position.y;
+                return true;
+            }
+
+            worldY = 0f;
+            return false;
+        }
+
+        static bool IsPointOnTerrainXZ(Terrain t, float x, float z)
+        {
+            Vector3 pos = t.transform.position;
+            Vector3 size = t.terrainData.size;
+            // 右/上边界用 <=，避免接缝处漏采；重叠边高度已对齐
+            return x >= pos.x && z >= pos.z && x <= pos.x + size.x && z <= pos.z + size.z;
         }
 
         public Vector2Int WorldToTreeCell(Vector3 world)

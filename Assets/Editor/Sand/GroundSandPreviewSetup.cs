@@ -27,7 +27,7 @@ namespace SandSystem.Editor
             Texture2D noiseA = CreateOrLoadNoise(NoiseAPath, seed: 11, scale: 6f, octaves: 4);
             Texture2D noiseB = CreateOrLoadNoise(NoiseBPath, seed: 29, scale: 11f, octaves: 5);
             Material mat = CreateOrUpdateTerrainMaterial(noiseA, noiseB);
-            BuildTerrainPreview(mat);
+            BuildTerrainGrid(mat, 3, restitchHeights: true);
 
             EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
             AssetDatabase.SaveAssets();
@@ -35,12 +35,39 @@ namespace SandSystem.Editor
 
             EditorUtility.DisplayDialog(
                 "Ground Sand Terrain Preview",
-                "Terrain 流沙预览已生成。\n\n" +
+                "已生成 3×3（共 9 块）Terrain 流沙预览（约 180×180 米）。\n\n" +
                 "1. 按 Play 查看近/中/远三层 Parallax 流沙\n" +
                 "2. 用 Terrain 工具 Raise/Lower 雕刻高度\n" +
                 "3. 选中 WindSystem 调节风向风速\n" +
-                "4. 选中 SandTerrain 上的 GroundSandController 调层参数\n\n" +
+                "4. 建议再运行 Sand / Setup Desert Skybox\n\n" +
                 "资源：Assets/SandPreview/",
+                "OK");
+        }
+
+        [MenuItem("Sand/Expand Terrains to 3x3 (9 tiles)", priority = 12)]
+        public static void ExpandTerrainsTo3x3()
+        {
+            EnsureFolders();
+            Texture2D noiseA = CreateOrLoadNoise(NoiseAPath, seed: 11, scale: 6f, octaves: 4);
+            Texture2D noiseB = CreateOrLoadNoise(NoiseBPath, seed: 29, scale: 11f, octaves: 5);
+            Material mat = CreateOrUpdateTerrainMaterial(noiseA, noiseB);
+            BuildTerrainGrid(mat, 3, restitchHeights: true);
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            AssetDatabase.SaveAssets();
+            EditorUtility.DisplayDialog("Terrains 3×3", "已确保场景中有 9 块相邻 Terrain，并用连续高度衔接接缝。", "OK");
+        }
+
+        [MenuItem("Sand/Restitch Terrain Heights (seamless)", priority = 13)]
+        public static void RestitchTerrainHeightsMenu()
+        {
+            int n = RestitchAllSandTerrains();
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            AssetDatabase.SaveAssets();
+            EditorUtility.DisplayDialog(
+                "Restitch Heights",
+                n > 0
+                    ? $"已用世界坐标连续噪声重算 {n} 块地形高度，并强制对齐邻边接缝。"
+                    : "场景中未找到 SandTerrain_* 。请先运行 Expand Terrains to 3x3。",
                 "OK");
         }
 
@@ -251,81 +278,253 @@ namespace SandSystem.Editor
             mat.SetColor("_ColorBright", new Color(0.95f, 0.82f, 0.55f, 1f));
         }
 
-        static void BuildTerrainPreview(Material mat)
+        static void BuildTerrainGrid(Material mat, int gridSize, bool restitchHeights = true)
         {
             EnsureCameraAndLight();
             EnsureWind();
 
-            // 移除旧 Plane 预览，避免叠在一起
             var oldPlane = GameObject.Find("SandGround");
             if (oldPlane != null)
                 Object.DestroyImmediate(oldPlane);
 
-            Terrain existing = null;
-            var terrains = Object.FindObjectsByType<Terrain>(FindObjectsSortMode.None);
-            foreach (var t in terrains)
+            var legacy = GameObject.Find("SandTerrain");
+            if (legacy != null)
+                legacy.name = "SandTerrain_1_1";
+
+            const float tile = 60f;
+            const int sharedRes = 257;
+            Vector3 origin = new Vector3(-30f, 0f, -30f);
+            int center = gridSize / 2;
+
+            Terrain[,] grid = new Terrain[gridSize, gridSize];
+
+            for (int iz = 0; iz < gridSize; iz++)
+            for (int ix = 0; ix < gridSize; ix++)
             {
-                if (t.name == "SandTerrain")
+                string name = $"SandTerrain_{ix}_{iz}";
+                string dataPath = $"{RootFolder}/TD_Sand_{ix}_{iz}.asset";
+                if (ix == center && iz == center)
+                    dataPath = TerrainDataPath;
+
+                Vector3 pos = origin + new Vector3((ix - center) * tile, 0f, (iz - center) * tile);
+
+                TerrainData data = AssetDatabase.LoadAssetAtPath<TerrainData>(dataPath);
+                if (data == null)
                 {
-                    existing = t;
-                    break;
+                    data = new TerrainData();
+                    data.heightmapResolution = sharedRes;
+                    data.size = new Vector3(tile, 12f, tile);
+                    StampWorldSpaceDunes(data, pos);
+                    AssetDatabase.CreateAsset(data, dataPath);
                 }
+                else
+                {
+                    if (data.heightmapResolution != sharedRes)
+                        data.heightmapResolution = sharedRes;
+                    data.size = new Vector3(tile, data.size.y > 0.1f ? data.size.y : 12f, tile);
+                    if (restitchHeights)
+                        StampWorldSpaceDunes(data, pos);
+                    EditorUtility.SetDirty(data);
+                }
+
+                GameObject terrainGo = GameObject.Find(name);
+                Terrain terrain;
+                if (terrainGo == null)
+                {
+                    terrainGo = Terrain.CreateTerrainGameObject(data);
+                    terrainGo.name = name;
+                    terrain = terrainGo.GetComponent<Terrain>();
+                }
+                else
+                {
+                    terrain = terrainGo.GetComponent<Terrain>();
+                    terrain.terrainData = data;
+                    var col = terrainGo.GetComponent<TerrainCollider>();
+                    if (col != null) col.terrainData = data;
+                }
+
+                terrainGo.transform.position = pos;
+                terrain.materialTemplate = mat;
+                terrain.drawInstanced = true;
+                terrain.allowAutoConnect = true;
+
+                if (terrainGo.GetComponent<GroundSandController>() == null)
+                    terrainGo.AddComponent<GroundSandController>();
+
+                grid[ix, iz] = terrain;
             }
 
-            TerrainData data = AssetDatabase.LoadAssetAtPath<TerrainData>(TerrainDataPath);
-            if (data == null)
+            if (restitchHeights)
+                StitchTerrainGridEdges(grid, gridSize);
+
+            for (int iz = 0; iz < gridSize; iz++)
+            for (int ix = 0; ix < gridSize; ix++)
             {
-                data = new TerrainData();
-                data.heightmapResolution = 513;
-                data.size = new Vector3(60f, 12f, 60f);
-                StampPreviewDunes(data);
-                AssetDatabase.CreateAsset(data, TerrainDataPath);
+                Terrain left = ix > 0 ? grid[ix - 1, iz] : null;
+                Terrain right = ix < gridSize - 1 ? grid[ix + 1, iz] : null;
+                Terrain bottom = iz > 0 ? grid[ix, iz - 1] : null;
+                Terrain top = iz < gridSize - 1 ? grid[ix, iz + 1] : null;
+                grid[ix, iz].SetNeighbors(left, top, right, bottom);
             }
 
-            GameObject terrainGo;
-            Terrain terrain;
-            if (existing != null)
+            var centerGo = grid[center, center] != null ? grid[center, center].gameObject : null;
+            Selection.activeGameObject = centerGo;
+            if (SceneView.lastActiveSceneView != null && centerGo != null)
             {
-                terrainGo = existing.gameObject;
-                terrain = existing;
-                terrain.terrainData = data;
+                SceneView.lastActiveSceneView.LookAt(
+                    centerGo.transform.position + new Vector3(tile * 0.5f, 0f, tile * 0.5f),
+                    Quaternion.Euler(40f, 0f, 0f),
+                    tile * gridSize * 0.55f);
             }
-            else
+        }
+
+        static int RestitchAllSandTerrains()
+        {
+            const int gridSize = 3;
+            Terrain[,] grid = new Terrain[gridSize, gridSize];
+            int found = 0;
+
+            for (int iz = 0; iz < gridSize; iz++)
+            for (int ix = 0; ix < gridSize; ix++)
             {
-                terrainGo = Terrain.CreateTerrainGameObject(data);
-                terrainGo.name = "SandTerrain";
-                terrain = terrainGo.GetComponent<Terrain>();
+                var go = GameObject.Find($"SandTerrain_{ix}_{iz}");
+                if (go == null) continue;
+                var terrain = go.GetComponent<Terrain>();
+                if (terrain == null || terrain.terrainData == null) continue;
+
+                var data = terrain.terrainData;
+                const int sharedRes = 257;
+                if (data.heightmapResolution != sharedRes)
+                    data.heightmapResolution = sharedRes;
+
+                StampWorldSpaceDunes(data, go.transform.position);
+                EditorUtility.SetDirty(data);
+                grid[ix, iz] = terrain;
+                found++;
             }
 
-            terrainGo.transform.position = new Vector3(-30f, 0f, -30f);
-            terrain.materialTemplate = mat;
-            terrain.drawInstanced = true;
-            terrain.allowAutoConnect = true;
+            if (found == 0) return 0;
 
-            if (terrainGo.GetComponent<GroundSandController>() == null)
-                terrainGo.AddComponent<GroundSandController>();
+            StitchTerrainGridEdges(grid, gridSize);
 
-            Selection.activeGameObject = terrainGo;
-            if (SceneView.lastActiveSceneView != null)
+            for (int iz = 0; iz < gridSize; iz++)
+            for (int ix = 0; ix < gridSize; ix++)
             {
-                SceneView.lastActiveSceneView.LookAt(terrainGo.transform.position + new Vector3(30f, 0f, 30f), Quaternion.Euler(35f, 0f, 0f), 40f);
+                if (grid[ix, iz] == null) continue;
+                Terrain left = ix > 0 ? grid[ix - 1, iz] : null;
+                Terrain right = ix < gridSize - 1 ? grid[ix + 1, iz] : null;
+                Terrain bottom = iz > 0 ? grid[ix, iz - 1] : null;
+                Terrain top = iz < gridSize - 1 ? grid[ix, iz + 1] : null;
+                grid[ix, iz].SetNeighbors(left, top, right, bottom);
             }
+
+            return found;
+        }
+
+        static void BuildTerrainPreview(Material mat)
+        {
+            BuildTerrainGrid(mat, 3, restitchHeights: true);
+        }
+
+        static void StampWorldSpaceDunes(TerrainData data, Vector3 worldOrigin)
+        {
+            int res = data.heightmapResolution;
+            float sizeX = data.size.x;
+            float sizeZ = data.size.z;
+            float[,] heights = new float[res, res];
+
+            for (int z = 0; z < res; z++)
+            for (int x = 0; x < res; x++)
+            {
+                float wx = worldOrigin.x + (x / (float)(res - 1)) * sizeX;
+                float wz = worldOrigin.z + (z / (float)(res - 1)) * sizeZ;
+                heights[z, x] = SampleDuneHeight01(wx, wz);
+            }
+
+            data.SetHeights(0, 0, heights);
+        }
+
+        static float SampleDuneHeight01(float worldX, float worldZ)
+        {
+            float d1 = Mathf.PerlinNoise(worldX * 0.055f + 10.3f, worldZ * 0.055f + 4.7f);
+            float d2 = Mathf.PerlinNoise(worldX * 0.12f + 40.1f, worldZ * 0.12f + 22.5f);
+            float d3 = Mathf.PerlinNoise(worldX * 0.28f + 3.0f, worldZ * 0.28f + 8.0f);
+            return Mathf.Clamp01(d1 * 0.48f + d2 * 0.28f + d3 * 0.12f + 0.06f);
+        }
+
+        static void StitchTerrainGridEdges(Terrain[,] grid, int gridSize)
+        {
+            for (int iz = 0; iz < gridSize; iz++)
+            for (int ix = 0; ix < gridSize - 1; ix++)
+            {
+                var a = grid[ix, iz];
+                var b = grid[ix + 1, iz];
+                if (a == null || b == null) continue;
+                StitchVerticalEdge(a.terrainData, b.terrainData);
+                EditorUtility.SetDirty(a.terrainData);
+                EditorUtility.SetDirty(b.terrainData);
+            }
+
+            for (int iz = 0; iz < gridSize - 1; iz++)
+            for (int ix = 0; ix < gridSize; ix++)
+            {
+                var a = grid[ix, iz];
+                var b = grid[ix, iz + 1];
+                if (a == null || b == null) continue;
+                StitchHorizontalEdge(a.terrainData, b.terrainData);
+                EditorUtility.SetDirty(a.terrainData);
+                EditorUtility.SetDirty(b.terrainData);
+            }
+        }
+
+        static void StitchVerticalEdge(TerrainData left, TerrainData right)
+        {
+            int res = left.heightmapResolution;
+            if (right.heightmapResolution != res)
+                right.heightmapResolution = res;
+
+            float[,] edgeL = left.GetHeights(res - 1, 0, 1, res);
+            float[,] edgeR = right.GetHeights(0, 0, 1, res);
+            float[,] outL = new float[res, 1];
+            float[,] outR = new float[res, 1];
+            for (int z = 0; z < res; z++)
+            {
+                float avg = (edgeL[z, 0] + edgeR[z, 0]) * 0.5f;
+                outL[z, 0] = avg;
+                outR[z, 0] = avg;
+            }
+            left.SetHeights(res - 1, 0, outL);
+            right.SetHeights(0, 0, outR);
+        }
+
+        static void StitchHorizontalEdge(TerrainData south, TerrainData north)
+        {
+            int res = south.heightmapResolution;
+            if (north.heightmapResolution != res)
+                north.heightmapResolution = res;
+
+            float[,] edgeS = south.GetHeights(0, res - 1, res, 1);
+            float[,] edgeN = north.GetHeights(0, 0, res, 1);
+            float[,] outS = new float[1, res];
+            float[,] outN = new float[1, res];
+            for (int x = 0; x < res; x++)
+            {
+                float avg = (edgeS[0, x] + edgeN[0, x]) * 0.5f;
+                outS[0, x] = avg;
+                outN[0, x] = avg;
+            }
+            south.SetHeights(0, res - 1, outS);
+            north.SetHeights(0, 0, outN);
         }
 
         static void StampPreviewDunes(TerrainData data)
         {
-            int res = data.heightmapResolution;
-            float[,] heights = new float[res, res];
-            for (int y = 0; y < res; y++)
-            for (int x = 0; x < res; x++)
-            {
-                float u = x / (float)(res - 1);
-                float v = y / (float)(res - 1);
-                float d1 = Mathf.PerlinNoise(u * 3.2f, v * 3.2f);
-                float d2 = Mathf.PerlinNoise(u * 7.1f + 20f, v * 7.1f + 10f);
-                heights[y, x] = Mathf.Clamp01(d1 * 0.45f + d2 * 0.2f + 0.08f);
-            }
-            data.SetHeights(0, 0, heights);
+            StampWorldSpaceDunes(data, Vector3.zero);
+        }
+
+        static void StampPreviewDunes(TerrainData data, int seedOffset)
+        {
+            StampWorldSpaceDunes(data, new Vector3(seedOffset * 60f, 0f, 0f));
         }
 
         static void EnsureCameraAndLight()
