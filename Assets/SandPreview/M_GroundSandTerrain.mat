@@ -97,38 +97,38 @@ Material:
     - _Alpha: 1
     - _AlphaCutoff: 0
     - _AlphaPower: 1
-    - _Contrast: 1.25
+    - _Contrast: 1.35
     - _EnableInstancedPerPixelNormal: 1
     - _FarAlpha: 0.6
-    - _FarParallax: 0.795
-    - _FarSpeed: 0.35
-    - _FarTiling: 3
+    - _FarParallax: 0.25
+    - _FarSpeed: 0.45
+    - _FarTiling: 2.5
     - _LayerBlend: 0.5
     - _MidAlpha: 0.75
-    - _MidParallax: 0.8
-    - _MidSpeed: 0.75
-    - _MidTiling: 5.5
+    - _MidParallax: 0.55
+    - _MidSpeed: 1
+    - _MidTiling: 4.5
     - _NearAlpha: 0.9
-    - _NearParallax: 0.61
-    - _NearSpeed: 1.4
-    - _NearTiling: 9
+    - _NearParallax: 0.9
+    - _NearSpeed: 1.8
+    - _NearTiling: 7.5
     - _NoiseBlend: 0.5
     - _NumLayersCount: 1
-    - _ParallaxAmplitude: 0.045
-    - _ParallaxHeightScale: 0.8
+    - _ParallaxAmplitude: 0
+    - _ParallaxHeightScale: 0
     - _SpeedA: 1
     - _SpeedB: 0.6
-    - _SpeedScale: 0.15
+    - _SpeedScale: 0.45
     - _TilingA: 4
     - _TilingB: 7
     - _UseLocalWind: 0
     - _WindSpeed: 1
-    - _WorldUVScale: 0.08
+    - _WorldUVScale: 0.12
     m_Colors:
     - _BaseColor: {r: 1, g: 1, b: 1, a: 1}
-    - _ColorBright: {r: 0.6792453, g: 0.5869893, b: 0.39409044, a: 1}
-    - _ColorDeep: {r: 0.6509434, g: 0.4079502, b: 0.11974903, a: 1}
-    - _ColorMid: {r: 0.4245283, g: 0.34658515, b: 0.22628158, a: 1}
+    - _ColorBright: {r: 0.95, g: 0.82, b: 0.55, a: 1}
+    - _ColorDeep: {r: 0.55, g: 0.38, b: 0.18, a: 1}
+    - _ColorMid: {r: 0.78, g: 0.6, b: 0.32, a: 1}
     - _FarTint: {r: 1, g: 1, b: 1, a: 1}
     - _MidTint: {r: 1, g: 0.98, b: 0.94, a: 1}
     - _NearTint: {r: 1, g: 0.95, b: 0.88, a: 1}

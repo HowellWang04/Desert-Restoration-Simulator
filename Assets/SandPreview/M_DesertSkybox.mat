@@ -29,8 +29,8 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _Clearness: 0.06712774
-    - _CloudCoverage: 0.07831569
+    - _Clearness: 0
+    - _CloudCoverage: 0
     - _CloudScale: 2.2
     - _CloudSpeed: 0.012
     - _Exposure: 1.05
